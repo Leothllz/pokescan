@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+pokescan-env/
+pokescan-rocm*/
+pokescan-amdnightly/
+.venv-wsl/
+.venv-wsl-*/
+
+# Local datasets, models, and runs
+dataset/
+dataset_crops/
+dataset_normalized/
+dataset_pair_composite*/
+dataset_pairs*/
+dataset_pokemon/
+weights/
+runs/
+.scrapy/
+
+# Local artifacts
+*.log
+gcc_html.txt
+ebay_screenshot.png
+
+# Large notebooks are kept local unless intentionally added later.
+*.ipynb
+
+# Card identification cache
+data/
+
+# Expo app
+pokescan-app/node_modules/
+pokescan-app/.expo/

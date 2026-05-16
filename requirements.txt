@@ -1,0 +1,16 @@
+beautifulsoup4>=4.12
+easyocr>=1.7
+fake-useragent>=1.5
+fastapi>=0.111
+kagglehub>=0.3
+matplotlib>=3.8
+opencv-python>=4.9
+playwright>=1.44
+pytest>=8.0
+python-multipart>=0.0.9
+rapidfuzz>=3.0
+requests>=2.31
+torch>=2.3
+torchvision>=0.18
+ultralytics>=8.3
+uvicorn>=0.30

@@ -1,0 +1,7 @@
+# Relative paths under dataset_pokemon to exclude from training datasets.
+# One path per line. Lines starting with # are ignored.
+10/back/img_1778525309_3647.jpg
+10/back/img_1778525331_3673.jpg
+10/front/img_1778527174_4994.jpg
+10/front/img_1778528990_6478.jpg
+10/front/img_1778526181_4314.jpg

@@ -1,0 +1,72 @@
+import requests
+from bs4 import BeautifulSoup
+import random
+import os
+import time
+from fake_useragent import UserAgent
+
+# --- CONFIGURATION ---
+SEARCH_QUERY = "pokemon card psa 10"
+PAGES_TO_SCRAPE = 5
+SAVE_FOLDER = "dataset_pokemon"
+# Ajoute tes IPs ici : ["http://ip:port", "http://user:pass@ip:port"]
+PROXY_LIST = [] 
+
+if not os.path.exists(SAVE_FOLDER):
+    os.makedirs(SAVE_FOLDER)
+
+ua = UserAgent()
+
+def get_headers():
+    return {
+        "User-Agent": ua.random,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/"
+    }
+
+def download_image(url, filename):
+    try:
+        img_data = requests.get(url, stream=True, timeout=10)
+        with open(filename, 'wb') as f:
+            for chunk in img_data.iter_content(1024):
+                f.write(chunk)
+    except Exception as e:
+        print(f"Erreur téléchargement : {e}")
+
+def scrape_ebay():
+    count = 0
+    for page in range(1, PAGES_TO_SCRAPE + 1):
+        print(f"--- Scraping Page {page} ---")
+        url = f"https://www.ebay.com/sch/i.html?_nkw={SEARCH_QUERY.replace(' ', '+')}&_pgn={page}"
+        
+        # Gestion du Proxy
+        proxy = {"http": random.choice(PROXY_LIST), "https": random.choice(PROXY_LIST)} if PROXY_LIST else None
+        
+        try:
+            response = requests.get(url, headers=get_headers(), proxies=proxy, timeout=15)
+            soup = BeautifulSoup(response.text, "html.parser")
+            
+            # Sélecteur des images sur eBay (peut varier selon les mises à jour du site)
+            items = soup.find_all("div", class_="s-item__image-wrapper")
+            
+            for item in items:
+                img_tag = item.find("img")
+                if img_tag and 'src' in img_tag.attrs:
+                    img_url = img_tag['src']
+                    if "http" in img_url and "s-l" in img_url:  # On filtre pour avoir les images de produits
+                        # On essaye de choper la version haute résolution (souvent s-l1600)
+                        img_url_hd = img_url.split('?')[0].replace("s-l225", "s-l1600")
+                        
+                        file_path = os.path.join(SAVE_FOLDER, f"card_{count}.jpg")
+                        download_image(img_url_hd, file_path)
+                        print(f"Sauvegardé : {file_path}")
+                        count += 1
+                        
+                        # Pause aléatoire pour ne pas paraître suspect
+                        time.sleep(random.uniform(0.5, 2.0))
+                        
+        except Exception as e:
+            print(f"Erreur sur la page {page} : {e}")
+
+if __name__ == "__main__":
+    scrape_ebay()
