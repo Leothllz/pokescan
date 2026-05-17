@@ -7,6 +7,7 @@ Base URL: https://api.tcgdex.net/v2/{lang}/...
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -152,8 +153,10 @@ def enrich_candidate(candidate: CardCandidate) -> CardCandidate:
     set_info = detail.get("set", {})
     card_count = set_info.get("cardCount", {})
 
+    candidate.name = detail.get("name", candidate.name)
     candidate.set_name = set_info.get("name", candidate.set_name)
     candidate.set_id = set_info.get("id", candidate.set_id)
+    candidate.number = detail.get("localId", candidate.number)
     candidate.number_total = str(card_count.get("official", "")) or None
     candidate.rarity = detail.get("rarity", candidate.rarity)
     candidate.hp = detail.get("hp")
@@ -163,39 +166,90 @@ def enrich_candidate(candidate: CardCandidate) -> CardCandidate:
     return candidate
 
 
+def _name_search_variants(name: str) -> list[str]:
+    """Return OCR-noise-tolerant name variants without changing language."""
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", value).strip(" .,;:-")
+        if value and value not in variants:
+            variants.append(value)
+
+    add(name)
+    add(re.sub(
+        r"\s+(?:V|VMAX|VSTAR|EX|GX|ex|GX|Tag\s*Team|-EX|-GX)\s*$",
+        "",
+        name,
+        flags=re.IGNORECASE,
+    ))
+    add(re.sub(r"\s+(?:[a-z]{1,3}\.?\s*){1,3}\d{1,3}\b.*$", "", name, flags=re.IGNORECASE))
+
+    tokens = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ’’-]+", name)
+
+    # Remove leading garbage tokens (OCR noise like "Nngaul")
+    while len(tokens) > 1 and (
+        len(tokens[0]) <= 4 or  # Short leading words are often noise
+        not any(c.isupper() for c in tokens[0][1:])  # All caps or weird case
+    ):
+        tokens.pop(0)
+        add(" ".join(tokens))
+
+    # Remove trailing garbage tokens
+    while len(tokens) > 1 and (len(tokens[-1]) <= 3 or not tokens[-1][0].isupper()):
+        tokens.pop()
+        add(" ".join(tokens))
+
+    return variants
+
+
 def search_tcgdex(ocr: OCRResult, language: str = "fr") -> list[CardCandidate]:
     """Search TCGdex using OCR results with multi-strategy fallback.
 
     Strategy:
-        1. Search by name in the detected language.
-        2. If language is FR and no results, retry in EN.
-        3. Filter by localId if collector number available.
+        1. Search by name in the detected/requested language.
+        2. Retry in the OCR language if it differs.
+        3. Search in English as universal fallback.
+        4. If name fails but we have collector number, search by number only.
+        5. Filter by localId if collector number available.
     """
-    lang = ocr.language or language
+    lang = language or ocr.language or "fr"
     candidates: list[CardCandidate] = []
 
     if ocr.name:
-        # Strategy 1: search in detected language.
-        candidates = search_by_name(ocr.name, lang)
+        name_variants = _name_search_variants(ocr.name)
 
-        # Strategy 2: fallback to other language.
-        if not candidates and lang == "fr":
-            candidates = search_by_name(ocr.name, "en")
-        elif not candidates and lang == "en":
-            candidates = search_by_name(ocr.name, "fr")
+        # Strategy 1: search in requested language first. OCR can confuse
+        # French "PV" with "HP", so do not let it override the app language.
+        for name_variant in name_variants:
+            candidates = search_by_name(name_variant, lang)
+            if candidates:
+                break
 
-        # Strategy 2b: try without suffix (V, VMAX, EX, etc.)
-        if not candidates:
-            # Strip common suffixes.
-            import re
-            base_name = re.sub(
-                r"\s+(?:V|VMAX|VSTAR|EX|GX|ex|GX|Tag\s*Team|-EX|-GX)\s*$",
-                "",
-                ocr.name,
-                flags=re.IGNORECASE,
-            ).strip()
-            if base_name != ocr.name:
-                candidates = search_by_name(base_name, lang)
+        # Strategy 2: fallback to the OCR language if it differs.
+        if not candidates and ocr.language and ocr.language != lang:
+            for name_variant in name_variants:
+                candidates = search_by_name(name_variant, ocr.language)
+                if candidates:
+                    break
+
+        # Strategy 3: fallback to English as universal language.
+        if not candidates and lang != "en":
+            for name_variant in name_variants:
+                candidates = search_by_name(name_variant, "en")
+                if candidates:
+                    break
+
+    # Strategy 4: if name search failed but we have a collector number, search by number.
+    if not candidates and ocr.local_id:
+        # Search across all languages for this collector number
+        for search_lang in [lang, "en", "fr", "ja"]:
+            all_cards = _api_get(f"/{search_lang}/cards")
+            if all_cards and isinstance(all_cards, list):
+                for card in all_cards:
+                    if card.get("localId") == ocr.local_id:
+                        candidates.append(_brief_to_candidate(card, search_lang))
+                if candidates:
+                    break
 
     # Filter by collector number if available.
     if candidates and ocr.local_id:
