@@ -71,9 +71,27 @@ def main(argv: list[str] | None = None) -> int:
         "--output", default=None,
         help="Output directory (default: data/embeddings/)",
     )
+    parser.add_argument(
+        "--checkpoint-every", type=int, default=250,
+        help="Write a partial FAISS index every N encoded cards (default: 250).",
+    )
+    parser.add_argument(
+        "--encode-batch-size", type=int, default=32,
+        help="Number of downloaded images to encode together on CLIP (default: 32).",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from an existing index in the output directory.",
+    )
     args = parser.parse_args(argv)
+    args.encode_batch_size = max(1, args.encode_batch_size)
 
-    from pokescan.identify.embeddings import build_index
+    from pokescan.identify.embeddings import (
+        encode_image,
+        encode_images,
+        load_saved_embeddings,
+        save_index,
+    )
     from pokescan.paths import DATA_DIR
 
     output_dir = Path(args.output) if args.output else DATA_DIR / "embeddings"
@@ -87,11 +105,64 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Output    : {output_dir}")
     print("=" * 60)
 
-    # Collect all card images across languages, deduplicating by card_id.
+    # Encode cards as they are downloaded, deduplicating by card_id.
+    # Keep only CLIP vectors in memory, never the full image catalog.
     seen_ids: set[str] = set()
-    card_images: list[tuple[str, np.ndarray]] = []
+    card_embeddings: list[tuple[str, str, np.ndarray]] = []
+    pending_images: list[tuple[str, str, np.ndarray]] = []
     total_skipped = 0
     total_failed = 0
+    total_encode_failed = 0
+
+    if args.resume:
+        resumed = load_saved_embeddings(output_dir)
+        card_embeddings.extend(resumed)
+        seen_ids.update(card_id for card_id, _lang, _embedding in resumed)
+        if resumed:
+            print(f"  Resumed existing index: {len(resumed)} vectors")
+
+    def add_embedding(card_id: str, lang: str, embedding: np.ndarray) -> None:
+        card_embeddings.append((card_id, lang, embedding))
+        if (
+            args.checkpoint_every > 0
+            and len(card_embeddings) % args.checkpoint_every == 0
+        ):
+            save_index(card_embeddings, output_dir)
+            print(f"  Checkpoint saved: {len(card_embeddings)} vectors", flush=True)
+
+    def flush_pending() -> int:
+        nonlocal total_encode_failed
+
+        if not pending_images:
+            return 0
+
+        batch = list(pending_images)
+        pending_images.clear()
+        print(
+            f"  Encoding batch: {batch[0][0]} ... {batch[-1][0]} ({len(batch)})",
+            flush=True,
+        )
+
+        try:
+            vectors = encode_images(
+                [image for _card_id, _lang, image in batch],
+                batch_size=max(1, args.encode_batch_size),
+            )
+            for (card_id, lang, _image), embedding in zip(batch, vectors):
+                add_embedding(card_id, lang, embedding)
+            return len(batch)
+        except Exception as exc:
+            print(f"  Batch encode failed: {type(exc).__name__}: {exc}")
+
+        encoded = 0
+        for card_id, lang, image in batch:
+            try:
+                add_embedding(card_id, lang, encode_image(image))
+                encoded += 1
+            except Exception as exc:
+                total_encode_failed += 1
+                print(f"  Encode failed for {card_id}: {type(exc).__name__}: {exc}")
+        return encoded
 
     for lang in args.languages:
         print(f"\n--- Language: {lang.upper()} ---")
@@ -107,8 +178,6 @@ def main(argv: list[str] | None = None) -> int:
         for set_idx, set_info in enumerate(sets_data):
             set_id = set_info.get("id", "")
             set_name = set_info.get("name", set_id)
-            card_count = set_info.get("cardCount", {}).get("total", "?")
-
             # Fetch cards in this set.
             cards_data = _fetch_json(f"{TCGDEX_BASE}/{lang}/sets/{set_id}")
             if not cards_data or not isinstance(cards_data, dict):
@@ -144,9 +213,11 @@ def main(argv: list[str] | None = None) -> int:
                     continue
 
                 seen_ids.add(card_id)
-                card_images.append((card_id, img))
-                set_new += 1
+                pending_images.append((card_id, lang, img))
                 processed += 1
+
+                if len(pending_images) >= args.encode_batch_size:
+                    set_new += flush_pending()
 
                 if args.max_per_set > 0 and processed >= args.max_per_set:
                     break
@@ -155,29 +226,31 @@ def main(argv: list[str] | None = None) -> int:
                 if processed % 20 == 0:
                     time.sleep(0.2)
 
+            set_new += flush_pending()
+
             if set_new > 0:
                 progress = f"[{set_idx + 1}/{len(sets_data)}]"
-                print(f"  {progress} {set_name}: +{set_new} new (total: {len(card_images)})")
+                print(f"  {progress} {set_name}: +{set_new} new (total: {len(card_embeddings)})")
 
             # Brief pause between sets.
             time.sleep(0.1)
 
     print(f"\n{'=' * 60}")
-    print(f"  Total images collected : {len(card_images)}")
+    print(f"  Total cards encoded    : {len(card_embeddings)}")
     print(f"  Skipped (duplicates)   : {total_skipped}")
     print(f"  Failed downloads       : {total_failed}")
+    print(f"  Failed encodes         : {total_encode_failed}")
     print(f"{'=' * 60}")
 
-    if not card_images:
+    if not card_embeddings:
         print("  No images to index!")
         return 1
 
-    # Build the FAISS index.
-    print(f"\n  Encoding {len(card_images)} images with CLIP...")
-    print("  (This may take a while on CPU — ~1-2 images/sec)")
+    # Build the FAISS index from precomputed vectors.
+    print(f"\n  Writing FAISS index for {len(card_embeddings)} vectors...")
 
     start = time.time()
-    count = build_index(card_images, output_dir)
+    count = save_index(card_embeddings, output_dir)
     elapsed = time.time() - start
 
     print(f"\n{'=' * 60}")

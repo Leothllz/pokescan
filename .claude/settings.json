@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(curl -X POST http://localhost:8000/identify -F file=@data/debug_requests/latest_upload.jpg -F language=fr -F visual_mode=auto -F top_k=3)",
+      "Bash(python -m json.tool)",
+      "Bash(pkill -f \"python.*api_server.py\")",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(tar -czf pokescan_models.tar.gz runs/classify/high_grade_baseline_3e_amdnightly/weights/best.pt runs/classify/pair_yolo26n_baseline/weights/best.pt)"
+    ]
+  }
+}

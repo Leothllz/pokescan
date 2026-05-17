@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pokescan-env/Scripts/python.exe -m pytest tests/ -x --no-header -q)",
+      "Bash(python api_server.py)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(npx expo *)"
+    ]
+  }
+}

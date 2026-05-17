@@ -5,6 +5,8 @@ Computes a weighted score combining OCR similarity and database fields.
 
 from __future__ import annotations
 
+import re
+
 from pokescan.identify.models import CardCandidate, OCRResult
 
 # Weights Phase 1 (OCR + DB only — used when no visual index).
@@ -27,13 +29,27 @@ WEIGHTS_WITH_VISUAL = {
 }
 
 
+def _normalize_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.lower().strip()
+    text = re.sub(r"\b(?:niv|niveau|lv|n)\.?\s*\d+\b", "", text)
+    text = re.sub(r"\bbase\b", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def _fuzzy_ratio(a: str | None, b: str | None) -> float:
     """Return 0.0–1.0 fuzzy similarity between two strings."""
     if not a or not b:
         return 0.0
+    a = _normalize_name(a)
+    b = _normalize_name(b)
+    if not a or not b:
+        return 0.0
     try:
         from rapidfuzz import fuzz
-        return fuzz.ratio(a.lower().strip(), b.lower().strip()) / 100.0
+        return fuzz.ratio(a, b) / 100.0
     except ImportError:
         # Fallback to basic comparison.
         a_clean = a.lower().strip()
@@ -59,6 +75,11 @@ def score_candidate(
 
     Returns a float in [0.0, 1.0].
     """
+    if visual_score is not None and not ocr.name and not ocr.local_id:
+        candidate.score_detail = {"visual": visual_score}
+        candidate.score = visual_score
+        return visual_score
+
     scores: dict[str, float] = {}
 
     # 1. Name similarity.
